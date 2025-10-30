@@ -1,0 +1,107 @@
+trigger:
+- main
+
+resources:
+  containers:
+    - container: sqlserver
+      image: mcr.microsoft.com/mssql/server:2022-latest
+      networks: 
+      - integrationtests
+      env:
+        SA_PASSWORD: SqlServer2022!
+        ACCEPT_EULA: Y
+        MSSQL_PID: Developer
+      ports:
+        - 1433:1433
+
+variables:
+  loadTestsScript: 'sqlserver_test.js'
+  htmtReportK6: 'db-loadtests.html'
+  testsDirectory: './tests'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-22.04'
+
+  # Variáveis para execução dos testes de carga
+  DatabaseTestsConnection: 'Server=127.0.0.1,1433;Database=DBTests;User Id=sa;Password=SqlServer2022!;TrustServerCertificate=True;'
+  Path_ScriptsSqlServer: './scripts/DBTests.sql'
+
+  # Versoes das ferramentas do k6:
+  xk6Version: 'v1.1.0'
+  xk6SqlVersion: 'v1.0.5'
+  xk6SqlDriverSqlServer: 'v0.1.1'
+  xk6FakerVersion: 'v0.4.4'
+
+stages:
+- stage: Tests
+  displayName: Tests stage
+  variables:
+  - group: k6-db-configurations
+  jobs:
+  - job: Tests
+    displayName: Tests
+    pool:
+      vmImage: $(vmImageName)
+    services:
+      sqlserver: sqlserver
+    steps:
+    - task: replacetokens@5
+      inputs:
+        targetFiles: '$(testsDirectory)/$(loadTestsScript)'
+        encoding: 'auto'
+        tokenPattern: 'default'
+        writeBOM: true
+        actionOnMissing: 'warn'
+        keepToken: false
+        actionOnNoFiles: 'continue'
+        enableTransforms: false
+        enableRecursion: false
+        useLegacyPattern: false
+        enableTelemetry: true
+      displayName: 'Atualizar script de testes com após replaces'
+    - script: |
+        cd $(testsDirectory)
+        cat $(loadTestsScript)
+      displayName: 'Exibir conteúdo do script de testes'
+    - script: |
+        docker images
+        echo ''
+        docker container ls
+        echo 'Aguardar por 10s a subida da instancia do SQL Server...'
+        sleep 10s
+        echo ''
+        docker container ls
+      displayName: Exibir imagens e container em execução
+    - script: |
+        echo '*** Exibir versao do SQL Server que sera utilizada ***'
+        echo ''
+        /opt/mssql-tools/bin/sqlcmd -S "127.0.0.1,1433" -U sa -P SqlServer2022! -d master -Q  "SELECT @@VERSION;"
+      displayName: Exibir versao do SQL Server que sera utilizada
+    - script: |
+        /opt/mssql-tools/bin/sqlcmd -S "127.0.0.1,1433" -U sa -P SqlServer2022! -d master -i $(Path_ScriptsSqlServer)
+      displayName: Criar banco DBTests
+    - script: |
+        cd $(testsDirectory)
+        docker run --rm -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build $(xk6Version) \
+          --with github.com/grafana/xk6-sql@$(xk6SqlVersion) \
+          --with github.com/grafana/xk6-faker@$(xk6FakerVersion) \
+          --with github.com/grafana/xk6-sql-driver-sqlserver@$(xk6SqlDriverSqlServer)
+      displayName: Gerar o executável do k6 com suporte a bancos relacionais via container do xk6
+    - script: |
+         cd $(testsDirectory)
+         ./k6
+      displayName: Testar executável do k6
+    - script: |
+         cd $(testsDirectory)
+         pwd
+         ls
+         ./k6 run sqlserver_test.js --vus $(ConcurrentUsers) --iterations $(Iterations)
+      displayName: Executar script de testes do k6
+    - script: |
+        cd /opt/mssql-tools/bin/
+        echo '*** Quantidade de registros gerados ***'
+        sqlcmd -S "127.0.0.1,1433" -U sa -P SqlServer2022! -d DBTests -Q "SELECT COUNT(1) AS QtdRegistros FROM dbo.Products;"
+        echo ''
+        echo '*** Amostragem com dados dos testes: $(SampleCount) registro(s) ***'
+        sqlcmd -S "127.0.0.1,1433" -U sa -P SqlServer2022! -d DBTests -Q "SELECT TOP $(SampleCount) * FROM dbo.Products;"
+      displayName: Exibir amostragem de registros criados na base DBTests
