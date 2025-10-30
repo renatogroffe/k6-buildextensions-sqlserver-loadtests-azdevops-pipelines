@@ -105,3 +105,15 @@ stages:
         echo '*** Amostragem com dados dos testes: $(SampleCount) registro(s) ***'
         sqlcmd -S "127.0.0.1,1433" -U sa -P SqlServer2022! -d DBTests -Q "SELECT TOP $(SampleCount) * FROM dbo.Products;"
       displayName: Exibir amostragem de registros criados na base DBTests
+    - script: |
+        cd $(testsDirectory)
+        pwd
+        echo ' '
+        echo '** Arquivos/diretórios após a execução dos testes:'
+        ls
+      displayName: Exibir arquivos gerados apos execucao dos testes
+    - task: PublishHtmlReport@1
+      condition: always()
+      inputs:
+        reportDir: $(testsDirectory)/$(htmtReportK6)
+      displayName: Publicar relatório com os resultados dos testes
